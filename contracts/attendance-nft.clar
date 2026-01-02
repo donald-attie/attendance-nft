@@ -108,3 +108,109 @@
     (ok event-id)
   )
 )
+
+;; Issue attendance NFT to an attendee
+(define-public (issue-attendance (event-id uint) (attendee principal))
+  (let
+    (
+      (event (unwrap! (map-get? events event-id) ERR-EVENT-NOT-FOUND))
+      (token-id (+ (var-get last-token-id) u1))
+      (new-issued-count (+ (get issued-count event) u1))
+    )
+    ;; Verify organizer
+    (asserts! (is-eq tx-sender (get organizer event)) ERR-NOT-AUTHORIZED)
+    
+    ;; Verify event is active
+    (asserts! (get is-active event) ERR-EVENT-CLOSED)
+    
+    ;; Validate attendee is a valid principal
+    (asserts! (not (is-eq attendee (get organizer event))) ERR-NOT-AUTHORIZED)
+    
+    ;; Check if attendee already has attendance for this event
+    (asserts! (is-none (map-get? attendance-records { event-id: event-id, attendee: attendee }))
+      ERR-ALREADY-ATTENDED)
+    
+    ;; Check max attendees
+    (asserts! (<= new-issued-count (get max-attendees event)) ERR-MAX-ATTENDEES-REACHED)
+    
+    ;; Mint NFT
+    (try! (nft-mint? attendance-nft token-id attendee))
+    
+    ;; Record attendance
+    (map-set attendance-records
+      { event-id: event-id, attendee: attendee }
+      { token-id: token-id, issued-at: stacks-block-height }
+    )
+    
+    ;; Map token to event
+    (map-set token-to-event token-id event-id)
+    
+    ;; Update event issued count
+    (map-set events event-id
+      (merge event { issued-count: new-issued-count })
+    )
+    
+    ;; Update token counter
+    (var-set last-token-id token-id)
+    (ok token-id)
+  )
+)
+
+;; Close an event (stop issuing new NFTs)
+(define-public (close-event (event-id uint))
+  (let
+    (
+      (event (unwrap! (map-get? events event-id) ERR-EVENT-NOT-FOUND))
+    )
+    ;; Verify organizer
+    (asserts! (is-eq tx-sender (get organizer event)) ERR-NOT-AUTHORIZED)
+    
+    ;; Close event
+    (map-set events event-id
+      (merge event { is-active: false })
+    )
+    (ok true)
+  )
+)
+
+;; Read-only functions
+
+;; Get event details
+(define-read-only (get-event (event-id uint))
+  (map-get? events event-id)
+)
+
+;; Get attendance record for a specific attendee at an event
+(define-read-only (get-attendance-record (event-id uint) (attendee principal))
+  (map-get? attendance-records { event-id: event-id, attendee: attendee })
+)
+
+;; Check if an address attended an event
+(define-read-only (has-attended (event-id uint) (attendee principal))
+  (is-some (map-get? attendance-records { event-id: event-id, attendee: attendee }))
+)
+
+;; Get event ID for a token
+(define-read-only (get-event-for-token (token-id uint))
+  (map-get? token-to-event token-id)
+)
+
+;; Get current event count
+(define-read-only (get-event-count)
+  (var-get last-event-id)
+)
+
+;; Get total NFTs minted
+(define-read-only (get-total-nfts)
+  (var-get last-token-id)
+)
+
+;; Update base URI (organizer only for their events)
+(define-public (set-base-uri (new-uri (string-ascii 256)))
+  (begin
+    ;; Validate new-uri is not empty
+    (asserts! (> (len new-uri) u0) ERR-INVALID-EVENT-DATA)
+    (var-set base-token-uri new-uri)
+    (ok true)
+  )
+)
