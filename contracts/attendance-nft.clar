@@ -1,0 +1,110 @@
+;; Proof of Attendance NFT Contract
+;; Allows event organizers to issue verifiable attendance NFTs
+
+;; Implement the SIP-009 NFT trait
+;; TESTNET: Use ST1NXBK3K5YYMD6FD41MVNP3JS1GABZ8TRVX023PT.nft-trait.nft-trait
+;; MAINNET: Use SP2PABAF9FTAJYNFZH93XENAJ8FVY99RRM50D2JG9.nft-trait.nft-trait
+(impl-trait 'ST1NXBK3K5YYMD6FD41MVNP3JS1GABZ8TRVX023PT.nft-trait.nft-trait)
+
+;; Define the NFT
+(define-non-fungible-token attendance-nft uint)
+
+;; Data Variables
+(define-data-var last-token-id uint u0)
+(define-data-var last-event-id uint u0)
+(define-data-var base-token-uri (string-ascii 256) "https://attendance.example.com/metadata/")
+
+;; Data Maps
+;; Event registry: event-id -> event details
+(define-map events
+  uint
+  {
+    name: (string-ascii 100),
+    organizer: principal,
+    date: uint,
+    max-attendees: uint,
+    issued-count: uint,
+    is-active: bool
+  }
+)
+
+;; Attendance records: (event-id, attendee) -> token-id
+(define-map attendance-records
+  { event-id: uint, attendee: principal }
+  { token-id: uint, issued-at: uint }
+)
+
+;; Token metadata: token-id -> event-id
+(define-map token-to-event
+  uint
+  uint
+)
+
+;; Error codes
+(define-constant ERR-NOT-AUTHORIZED (err u100))
+(define-constant ERR-NOT-TOKEN-OWNER (err u101))
+(define-constant ERR-EVENT-NOT-FOUND (err u102))
+(define-constant ERR-EVENT-CLOSED (err u103))
+(define-constant ERR-ALREADY-ATTENDED (err u104))
+(define-constant ERR-MAX-ATTENDEES-REACHED (err u105))
+(define-constant ERR-INVALID-EVENT-DATA (err u106))
+
+;; SIP-009 Required Functions
+
+;; Get the last token ID
+(define-read-only (get-last-token-id)
+  (ok (var-get last-token-id))
+)
+
+;; Get token URI - returns metadata link for the NFT
+(define-read-only (get-token-uri (token-id uint))
+  (ok (some (var-get base-token-uri)))
+)
+
+;; Get owner of a token
+(define-read-only (get-owner (token-id uint))
+  (ok (nft-get-owner? attendance-nft token-id))
+)
+
+;; Transfer token - SIP-009 requires this signature
+(define-public (transfer (token-id uint) (sender principal) (recipient principal))
+  (begin
+    (asserts! (is-eq tx-sender sender) ERR-NOT-AUTHORIZED)
+    (asserts! (is-eq sender (unwrap! (nft-get-owner? attendance-nft token-id) ERR-NOT-TOKEN-OWNER))
+      ERR-NOT-TOKEN-OWNER)
+    ;; Validate recipient is not zero address
+    (asserts! (not (is-eq recipient tx-sender)) ERR-NOT-AUTHORIZED)
+    (nft-transfer? attendance-nft token-id sender recipient)
+  )
+)
+
+;; Custom Functions for Event Management
+
+;; Create a new event
+(define-public (create-event (name (string-ascii 100)) (date uint) (max-attendees uint))
+  (let
+    (
+      (event-id (+ (var-get last-event-id) u1))
+    )
+    ;; Validate inputs
+    (asserts! (> (len name) u0) ERR-INVALID-EVENT-DATA)
+    (asserts! (> date stacks-block-height) ERR-INVALID-EVENT-DATA)
+    (asserts! (> max-attendees u0) ERR-INVALID-EVENT-DATA)
+    
+    ;; Create event
+    (map-set events event-id
+      {
+        name: name,
+        organizer: tx-sender,
+        date: date,
+        max-attendees: max-attendees,
+        issued-count: u0,
+        is-active: true
+      }
+    )
+    
+    ;; Update event counter
+    (var-set last-event-id event-id)
+    (ok event-id)
+  )
+)
